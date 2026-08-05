@@ -3,6 +3,7 @@
   "main": "src/worker.js",
   "compatibility_date": "2026-08-05",
   "account_id": "1ddebf6f9507d3fc9052158be9d42dee",
+  "workers_dev": false,
   "triggers": {
     "crons": ["0 15 * * *"]
   },
