@@ -28,7 +28,7 @@ export default {
   },
 };
 
-async function runDigest(env) {
+export async function runDigest(env) {
   console.log('=== Starting blog digest ===');
 
   const xml = await fetch(FEED_URL).then(r => {
@@ -71,7 +71,7 @@ async function runDigest(env) {
   console.log(`Sent digest with ${newItems.length} new items`);
 }
 
-function parseFeed(xml) {
+export function parseFeed(xml) {
   return [...xml.matchAll(/<item>[\s\S]*?<title>([\s\S]*?)<\/title>[\s\S]*?<link>([\s\S]*?)<\/link>[\s\S]*?<description>([\s\S]*?)<\/description>/gi)].map(m => ({
     title: clean(m[1]),
     link: clean(m[2]),
@@ -79,7 +79,7 @@ function parseFeed(xml) {
   }));
 }
 
-function renderDigest(items) {
+export function renderDigest(items) {
   const out = [
     '# Cloudflare Blog Digest',
     `Recipient: ${RECIPIENT}`,
@@ -97,11 +97,11 @@ function renderDigest(items) {
   return out.join('\n');
 }
 
-function clean(s) {
+export function clean(s) {
   return s.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
 }
 
-async function loadState(env) {
+export async function loadState(env) {
   try {
     const raw = await env['cf-blog-watcher'].get('seen');
     if (raw) {
@@ -118,7 +118,7 @@ async function loadState(env) {
   }
 }
 
-async function saveState(env, state) {
+export async function saveState(env, state) {
   try {
     const serialized = JSON.stringify(state);
     await env['cf-blog-watcher'].put('seen', serialized);

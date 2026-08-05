@@ -106,12 +106,33 @@ npx wrangler kv key get seen --binding "cf-blog-watcher" --remote
 npx wrangler kv key delete seen --binding "cf-blog-watcher" --preview false --remote
 ```
 
+## Testing
+
+```bash
+npm test
+```
+
+Tests cover all core logic with mocked bindings (no live KV or email sending):
+
+- **RSS Parsing** — `parseFeed()` extracts items, strips CDATA/HTML, handles edge cases
+- **Digest Rendering** — `renderDigest()` formats markdown with truncation and fallbacks
+- **State Management** — `loadState()` and `saveState()` with mocked KV
+- **Security Gating** — `fetch` handler rejects `/trigger` when `ENABLE_DEBUG` is unset
+- **Integration** — `runDigest()` end-to-end with mocked fetch, KV, and email
+
+```bash
+npm run test:watch  # watch mode for development
+```
+
 ## File Structure
 
 ```
 cf-blog-watcher/
 ├── src/
 │   └── worker.js          # Main Worker script
+├── test/
+│   └── worker.test.js     # Unit + integration tests
+├── vitest.config.js       # Vitest configuration
 ├── wrangler.jsonc         # Worker configuration, bindings, triggers
 ├── package.json           # Dependencies and scripts
 ├── .gitignore             # Excludes node_modules, .wrangler
