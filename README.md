@@ -9,7 +9,8 @@ flowchart TB
     subgraph Cloudflare["Cloudflare Edge"]
         subgraph Worker["Worker (cf-blog-watcher)"]
             Cron["Cron Trigger\n0 15 * * * UTC"]
-            HTTP["HTTP Handler\n/trigger"]
+            HTTP["HTTP Handler\n(health check only)"]
+            Trigger["Debug Trigger\n/trigger (disabled)"]
             Core["Core Logic"]
             Parser["RSS Parser"]
             Dedup["Deduplication\nFilter"]
@@ -26,7 +27,6 @@ flowchart TB
     Inbox["you@example.com\nInbox"]
 
     Cron --> Core
-    HTTP --> Core
     Core --> Parser
     Parser --> Feed
     Parser --> Dedup
@@ -46,13 +46,64 @@ flowchart TB
 5. **Email Delivery** — Sends the digest via Cloudflare's `send_email` binding
 6. **State Update** — Persists the latest article list back to KV (keeps last 200)
 
-## Manual Trigger
+## Security Model
 
-You can also trigger the digest on-demand via HTTP:
+- **`workers_dev: false`** — No public `.workers.dev` URL. The Worker is only accessible via Cron Triggers.
+- **Debug trigger disabled by default** — The `/trigger` HTTP endpoint is only active when `ENABLE_DEBUG=true` is set.
+- **Token authentication** — When debug mode is enabled, the trigger requires a secret `TRIGGER_TOKEN` header.
+
+## Debug Mode (Manual Trigger)
+
+For testing or ad-hoc runs, enable the debug trigger:
 
 ```bash
+# Set debug flag
+npx wrangler vars put ENABLE_DEBUG
+# Enter value: true
+
+# Deploy to apply
+npm run deploy
+```
+
+Then trigger manually:
+```bash
 curl -H "X-Trigger-Token: $TRIGGER_TOKEN" \
-  https://cf-blog-watcher.jsherron-test-account.workers.dev/trigger
+  https://<your-worker-domain>/trigger
+```
+
+To disable:
+```bash
+npx wrangler vars delete ENABLE_DEBUG
+npm run deploy
+```
+
+## Observability
+
+### Live Log Tailing
+Watch real-time execution logs:
+```bash
+npx wrangler tail
+```
+
+You will see structured output for each run:
+```
+=== Starting blog digest ===
+Feed parsed: 20 total items
+State loaded: 0 seen items
+New items found: 20
+KV write success: key='seen', 1057 bytes, 20 items
+Sent digest with 20 new items
+```
+
+### KV Inspection
+Check the deduplication state:
+```bash
+npx wrangler kv key get seen --binding "cf-blog-watcher" --remote
+```
+
+### Clear State (for testing)
+```bash
+npx wrangler kv key delete seen --binding "cf-blog-watcher" --preview false --remote
 ```
 
 ## File Structure
@@ -89,7 +140,8 @@ cf-blog-watcher/
    - Replace KV namespace IDs with your own
    - Set `FROM_EMAIL` to an address on a domain you own with Email Routing enabled
    - Replace the preview KV ID for local development
-4. Set the trigger token as a secret:
+   - Set `workers_dev: false` (recommended for production; set to `true` for testing)
+4. Set secrets:
    ```bash
    npx wrangler secret put TRIGGER_TOKEN
    ```
@@ -115,7 +167,9 @@ npx wrangler tail
 ## Key Features
 
 - **Zero Infrastructure** — No servers, no databases, no cron runners
+- **Zero Public Surface** — No public URL by default; only Cron Triggers can invoke
+- **Debug Mode** — Optional HTTP trigger for testing, gated by env var + secret token
 - **Stateless with Persistence** — KV provides durable deduplication state
-- **Secure Manual Trigger** — Token-protected HTTP endpoint for on-demand runs
 - **Efficient Parsing** — Lightweight regex-based RSS parser (no XML libraries)
 - **Bounded State** — Keeps only the last 200 article links to prevent KV bloat
+- **Full Observability** — Structured console logging + live tail via Wrangler

@@ -18,8 +18,8 @@ Cloudflare Worker that monitors blog.cloudflare.com RSS and sends email digests.
 ```
 Cron Trigger (daily 15:00 UTC) ─┐
                                 ├─→ runDigest(env)
-HTTP GET /trigger + token ──────┘       │
-                                          ▼
+HTTP GET /trigger + debug ──────┘       │
+                                           ▼
                             ┌─────────────────────────┐
                             │ 1. fetch RSS feed       │
                             │ 2. parseFeed() → items  │
@@ -30,6 +30,8 @@ HTTP GET /trigger + token ──────┘       │
                             │ 7. saveState() to KV    │
                             └─────────────────────────┘
 ```
+
+**Security:** `workers_dev: false` removes public `.workers.dev` URL. The `/trigger` endpoint is only active when `ENABLE_DEBUG=true`.
 
 ## Development Workflow
 
@@ -59,6 +61,7 @@ npx wrangler kv key delete seen --binding "cf-blog-watcher" --preview false --re
 - **`EMAIL`** (Send Email) — Platform email sending
 - **`FROM_EMAIL`** (var) — Sender address (must own domain, Email Routing enabled)
 - **`TRIGGER_TOKEN`** (secret) — HTTP trigger auth token
+- **`ENABLE_DEBUG`** (var) — Set `"true"` to enable the `/trigger` HTTP endpoint
 
 ## State Format
 
@@ -98,3 +101,4 @@ Bounded to 200 items: `state.seen = [...new Set([...newItems, ...state.seen])].s
 - **Account ID**: Set in `wrangler.jsonc` if you have multiple accounts. Wrangler needs this for KV/secret operations in non-interactive mode.
 - **KV preview ID**: Replace `<ID_OF_PREVIEW_KV_NAMESPACE_FOR_LOCAL_DEVELOPMENT>` for local dev with KV.
 - **Email Routing**: Must be enabled on sender domain. Catch-all or specific routing rule recommended.
+- **Debug mode**: The `/trigger` endpoint requires `ENABLE_DEBUG=true`. Without it, the endpoint returns 200 for the health check but does not expose the trigger. Set `workers_dev: true` temporarily if you need a public `.workers.dev` URL for testing.

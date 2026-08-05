@@ -8,16 +8,20 @@ export default {
 
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const token = request.headers.get('X-Trigger-Token');
 
-    if (url.pathname === '/trigger' && token === env.TRIGGER_TOKEN) {
-      try {
-        await runDigest(env);
-        return new Response('Digest triggered successfully', { status: 200 });
-      } catch (err) {
-        console.error('Manual trigger failed:', err);
-        return new Response(`Error: ${err.message}`, { status: 500 });
+    // Debug trigger endpoint — disabled by default for security
+    if (env.ENABLE_DEBUG === 'true' && url.pathname === '/trigger') {
+      const token = request.headers.get('X-Trigger-Token');
+      if (token === env.TRIGGER_TOKEN) {
+        try {
+          await runDigest(env);
+          return new Response('Digest triggered successfully', { status: 200 });
+        } catch (err) {
+          console.error('Manual trigger failed:', err);
+          return new Response(`Error: ${err.message}`, { status: 500 });
+        }
       }
+      return new Response('Unauthorized', { status: 401 });
     }
 
     return new Response('Cloudflare Blog Watcher OK', { status: 200 });
