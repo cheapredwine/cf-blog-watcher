@@ -1,0 +1,24 @@
+{
+  "name": "cf-blog-watcher",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-05",
+  "account_id": "1ddebf6f9507d3fc9052158be9d42dee",
+  "triggers": {
+    "crons": ["0 15 * * *"]
+  },
+  "vars": {
+    "FROM_EMAIL": "no-reply@example.com"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "cf-blog-watcher",
+      "id": "08457e38f0584166a7abea10498ecd37",
+      "preview_id": "<ID_OF_PREVIEW_KV_NAMESPACE_FOR_LOCAL_DEVELOPMENT>"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ]
+}
