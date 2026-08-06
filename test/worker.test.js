@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import worker, { parseFeed, clean, renderDigest, loadState, saveState, runDigest } from '../src/worker.js';
 
 describe('parseFeed', () => {
-  it('extracts title, link, and description from RSS items', () => {
+  it('extracts title, link, pubDate, and description from RSS items', () => {
     const xml = `
       <rss>
         <item>
@@ -22,11 +22,13 @@ describe('parseFeed', () => {
     expect(items[0]).toEqual({
       title: 'Post One',
       link: 'https://blog.cloudflare.com/post-one/',
+      pubDate: '',
       description: 'First post description',
     });
     expect(items[1]).toEqual({
       title: 'Post Two',
       link: 'https://blog.cloudflare.com/post-two/',
+      pubDate: '',
       description: 'Second post description',
     });
   });
@@ -87,49 +89,38 @@ describe('clean', () => {
 });
 
 describe('renderDigest', () => {
-  it('renders markdown digest with all items', () => {
+  it('renders HTML digest with all items', () => {
     const items = [
       {
         title: 'Post One',
         link: 'https://blog.cloudflare.com/post-one/',
-        description: 'Description one',
+        summary: 'Analysis one',
       },
       {
         title: 'Post Two',
         link: 'https://blog.cloudflare.com/post-two/',
-        description: 'Description two',
+        summary: 'Analysis two',
       },
     ];
-    const digest = renderDigest(items);
-    expect(digest).toContain('# Cloudflare Blog Digest');
-    expect(digest).toContain('New articles: 2');
-    expect(digest).toContain('- Post One');
-    expect(digest).toContain('https://blog.cloudflare.com/post-one/');
-    expect(digest).toContain('Description one');
-    expect(digest).toContain('- Post Two');
-    expect(digest).toContain('Recipient: you@example.com');
-    expect(digest).toContain('Source: https://blog.cloudflare.com/rss/');
+    const { text, html } = renderDigest(items);
+    expect(html).toContain('Cloudflare Blog Digest');
+    expect(html).toContain('Post One');
+    expect(html).toContain('Post Two');
+    expect(html).toContain('Analysis one');
+    expect(html).toContain('Analysis two');
+    expect(text).toContain('Post One');
+    expect(text).toContain('Analysis one');
   });
 
-  it('truncates long descriptions to 220 chars', () => {
+  it('shows fallback for empty summary', () => {
     const items = [{
-      title: 'Long Desc',
-      link: 'https://blog.cloudflare.com/long/',
-      description: 'a'.repeat(500),
+      title: 'No Summary',
+      link: 'https://blog.cloudflare.com/no-summary/',
+      summary: '',
     }];
-    const digest = renderDigest(items);
-    const descLine = digest.split('\n').find(l => l.includes('a'.repeat(10)));
-    expect(descLine).toHaveLength(220 + 2); // 2 spaces indent
-  });
-
-  it('shows fallback for empty description', () => {
-    const items = [{
-      title: 'No Desc',
-      link: 'https://blog.cloudflare.com/no-desc/',
-      description: '',
-    }];
-    const digest = renderDigest(items);
-    expect(digest).toContain('No description available.');
+    const { html, text } = renderDigest(items);
+    expect(html).toContain('Not available.');
+    expect(text).toContain('Not available.');
   });
 });
 
@@ -248,18 +239,20 @@ describe('runDigest integration', () => {
         </item>
       </rss>
     `;
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve(mockXml),
-    });
+    const mockHtml = '<html><body><article><p>Article content here</p></article></body></html>';
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(mockXml) })
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(mockHtml) });
 
     const emailSend = vi.fn().mockResolvedValue(undefined);
     const kvPut = vi.fn().mockResolvedValue(undefined);
     const kvGet = vi.fn().mockResolvedValue(null);
+    const aiRun = vi.fn().mockResolvedValue({ response: 'AI-generated analysis of the article.' });
 
     const env = {
       'cf-blog-watcher': { get: kvGet, put: kvPut },
       EMAIL: { send: emailSend },
+      AI: { run: aiRun },
       FROM_EMAIL: 'no-reply@example.com',
     };
 
@@ -339,13 +332,14 @@ describe('runDigest integration', () => {
         </item>
       </rss>
     `;
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve(mockXml),
-    });
+    const mockHtml = '<html><body><article><p>Article content here</p></article></body></html>';
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(mockXml) })
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(mockHtml) });
 
     const kvPut = vi.fn().mockResolvedValue(undefined);
     const existingSeen = Array.from({ length: 250 }, (_, i) => `https://example.com/${i}`);
+    const aiRun = vi.fn().mockResolvedValue({ response: 'AI analysis.' });
 
     const env = {
       'cf-blog-watcher': {
@@ -353,6 +347,7 @@ describe('runDigest integration', () => {
         put: kvPut,
       },
       EMAIL: { send: vi.fn().mockResolvedValue(undefined) },
+      AI: { run: aiRun },
       FROM_EMAIL: 'no-reply@example.com',
     };
 
