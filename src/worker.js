@@ -1,6 +1,7 @@
 const FEED_URL = 'https://blog.cloudflare.com/rss/';
 const RECIPIENT = 'you@example.com';
 const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
+const MAX_SUMMARY_LENGTH = 1200; // Hard cap to stay under Workers Email API body limits
 
 export default {
   async scheduled(event, env, ctx) {
@@ -107,6 +108,7 @@ export async function summarizeArticle(env, url, rssDescription) {
   const truncated = content.slice(0, 7000);
 
   const response = await env.AI.run(AI_MODEL, {
+    max_tokens: 512,
     messages: [
       {
         role: 'system',
@@ -185,21 +187,30 @@ export function stripHtml(html) {
 export function renderDigest(items) {
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
+  // Truncate summaries that exceed the hard cap (rare, but protects email size)
+  const safeSummaries = items.map(item => {
+    const summary = item.summary || 'Not available.';
+    if (summary.length > MAX_SUMMARY_LENGTH) {
+      return { ...item, summary: summary.slice(0, MAX_SUMMARY_LENGTH).trim() + '…' };
+    }
+    return item;
+  });
+
   // Plain-text fallback
   const textLines = [
     `${items.length} new Cloudflare blog article${items.length !== 1 ? 's' : ''} — ${dateStr}`,
     '',
   ];
-  items.forEach((item, i) => {
+  safeSummaries.forEach((item, i) => {
     textLines.push(`[${i + 1}] ${item.title}`);
     if (item.pubDate) textLines.push(`    Date: ${item.pubDate}`);
     textLines.push(`    ${item.link}`);
-    textLines.push(`    ${item.summary || 'Not available.'}`);
+    textLines.push(`    ${item.summary}`);
     textLines.push('');
   });
 
   // HTML email body
-  const articlesHtml = items.map((item, i) => `
+  const articlesHtml = safeSummaries.map((item, i) => `
     <tr>
       <td style="padding: 32px 0 0 0;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -222,7 +233,7 @@ export function renderDigest(items) {
           </tr>
           <tr>
             <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 24px; color: #374151;">
-              ${escapeHtml(item.summary || 'Not available.').replace(/\n/g, '<br>')}
+              ${escapeHtml(item.summary).replace(/\n/g, '<br>')}
             </td>
           </tr>
         </table>
