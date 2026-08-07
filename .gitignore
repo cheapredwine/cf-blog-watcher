@@ -2,3 +2,8 @@ node_modules/
 .wrangler/
 .dev.vars
 .DS_Store
+
+# Security / build artifacts
+dist/
+.env
+*.pem

@@ -112,7 +112,7 @@ export async function summarizeArticle(env, url, rssDescription) {
         role: 'system',
         content: `You are a skeptical technical analyst writing for a senior solutions engineer who needs to position Cloudflare products to enterprise customers. Your job is to cut through marketing and evaluate the actual technical substance of each blog post.
 
-For every article, produce a tight 3-5 sentence analysis in this exact structure:
+For every article, produce a tight 3-5 sentence analysis in this exact structure. Separate each section with a blank line:
 
 1. WHAT IT IS — A precise, technical description of the product/feature/announcement. No buzzwords. If the post is vague, say so.
 
@@ -222,7 +222,7 @@ export function renderDigest(items) {
           </tr>
           <tr>
             <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 24px; color: #374151;">
-              ${escapeHtml(item.summary || 'Not available.')}
+              ${escapeHtml(item.summary || 'Not available.').replace(/\n/g, '<br>')}
             </td>
           </tr>
         </table>
