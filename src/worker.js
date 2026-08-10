@@ -1,7 +1,7 @@
 const FEED_URL = 'https://blog.cloudflare.com/rss/';
 const RECIPIENT = 'you@example.com';
 const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
-const MAX_SUMMARY_LENGTH = 1200; // Hard cap to stay under Workers Email API body limits
+const MAX_SUMMARY_LENGTH = 2500;
 
 export default {
   async scheduled(event, env, ctx) {
@@ -108,7 +108,7 @@ export async function summarizeArticle(env, url, rssDescription) {
   const truncated = content.slice(0, 7000);
 
   const response = await env.AI.run(AI_MODEL, {
-    max_tokens: 512,
+    max_tokens: 1024,
     messages: [
       {
         role: 'system',
@@ -184,6 +184,52 @@ export function stripHtml(html) {
     .trim();
 }
 
+export function truncateAtSentence(text, maxLen) {
+  if (text.length <= maxLen) return text;
+  const slice = text.slice(0, maxLen);
+  const searchStart = Math.max(0, maxLen - 400);
+  const searchSlice = slice.slice(searchStart);
+  const endings = ['. ', '? ', '! '];
+  let bestCut = -1;
+  for (const ending of endings) {
+    const idx = searchSlice.lastIndexOf(ending);
+    if (idx !== -1) {
+      bestCut = Math.max(bestCut, searchStart + idx + ending.length);
+    }
+  }
+  if (bestCut > maxLen * 0.7) {
+    return slice.slice(0, bestCut).trim();
+  }
+  const lastSpace = slice.lastIndexOf(' ');
+  return slice.slice(0, lastSpace).trim() + '…';
+}
+
+export function formatSummary(summary, isHtml) {
+  let formatted = summary.replace(/\s+/g, ' ').trim();
+  const sections = [
+    'WHAT IT IS —',
+    'WHY A CUSTOMER CARES —',
+    'MARKET POSITIONING —',
+    'CUSTOMER CONVERSATION —',
+  ];
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i];
+    const idx = formatted.indexOf(section);
+    if (idx !== -1) {
+      const before = formatted.slice(0, idx).trimEnd();
+      const after = formatted.slice(idx + section.length);
+      if (isHtml) {
+        const spacer = i > 0 ? '<br><br>' : '';
+        formatted = before + spacer + '<strong>' + section + '</strong>' + after;
+      } else {
+        const spacer = i > 0 ? '\n\n' : '';
+        formatted = before + spacer + section + after;
+      }
+    }
+  }
+  return formatted.trim();
+}
+
 export function renderDigest(items) {
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -191,7 +237,7 @@ export function renderDigest(items) {
   const safeSummaries = items.map(item => {
     const summary = item.summary || 'Not available.';
     if (summary.length > MAX_SUMMARY_LENGTH) {
-      return { ...item, summary: summary.slice(0, MAX_SUMMARY_LENGTH).trim() + '…' };
+      return { ...item, summary: truncateAtSentence(summary, MAX_SUMMARY_LENGTH) };
     }
     return item;
   });
@@ -202,15 +248,26 @@ export function renderDigest(items) {
     '',
   ];
   safeSummaries.forEach((item, i) => {
+    if (i > 0) {
+      textLines.push('─'.repeat(60));
+      textLines.push('');
+    }
     textLines.push(`[${i + 1}] ${item.title}`);
     if (item.pubDate) textLines.push(`    Date: ${item.pubDate}`);
     textLines.push(`    ${item.link}`);
-    textLines.push(`    ${item.summary}`);
+    textLines.push(`    ${formatSummary(item.summary, false)}`);
     textLines.push('');
   });
 
   // HTML email body
-  const articlesHtml = safeSummaries.map((item, i) => `
+  const articlesHtml = safeSummaries.map((item, i) => {
+    const separator = i > 0 ? `
+    <tr>
+      <td style="padding: 24px 0 0 0;">
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 0;">
+      </td>
+    </tr>` : '';
+    return separator + `
     <tr>
       <td style="padding: 32px 0 0 0;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -233,13 +290,14 @@ export function renderDigest(items) {
           </tr>
           <tr>
             <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 24px; color: #374151;">
-              ${escapeHtml(item.summary).replace(/\n/g, '<br>')}
+              ${formatSummary(escapeHtml(item.summary), true)}
             </td>
           </tr>
         </table>
       </td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   const html = `<!DOCTYPE html>
 <html>
