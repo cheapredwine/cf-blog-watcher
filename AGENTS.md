@@ -57,6 +57,8 @@ npx wrangler tail
 
 ### Clear KV state (testing)
 ```bash
+# --preview false is required: wrangler.jsonc sets both id and preview_id,
+# and wrangler refuses to run without an explicit target (fails silently if output is piped)
 npx wrangler kv key delete seen --binding "cf-blog-watcher" --preview false --remote
 ```
 
