@@ -1,0 +1,6 @@
+# Copy to .dev.vars and fill in. .dev.vars is gitignored.
+# Production: set via `npx wrangler secret put RECIPIENT` and `npx wrangler secret put FROM_EMAIL`
+RECIPIENT="you@example.com"
+FROM_EMAIL="no-reply@example.com"
+TRIGGER_TOKEN=""
+ENABLE_DEBUG=""

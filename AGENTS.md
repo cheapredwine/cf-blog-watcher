@@ -9,6 +9,7 @@ Cloudflare Worker monitors blog.cloudflare.com RSS, sends email digests with AI-
 | File | Purpose |
 |------|---------|
 | `src/worker.js` | Main entry. Exports `scheduled()` and `fetch()` handlers. |
+| `src/config.js` | Built-in defaults: feed URL, AI model, system prompt. |
 | `wrangler.jsonc` | Platform config: bindings, triggers, vars, account_id. |
 | `package.json` | Standard Node project. Scripts: `dev`, `deploy`. |
 | `.gitignore` | Excludes `node_modules/`, `.wrangler/`, `.dev.vars`. |
@@ -21,6 +22,7 @@ Cron Trigger (daily 15:00 UTC) ─┐
 HTTP GET /trigger + debug ──────┘       │
                                            ▼
                             ┌─────────────────────────┐
+                            │ 0. loadConfig() from KV  │
                             │ 1. fetch RSS feed         │
                             │ 2. parseFeed() → items    │
                             │ 3. loadState() from KV    │
@@ -60,10 +62,11 @@ npx wrangler kv key delete seen --binding "cf-blog-watcher" --preview false --re
 
 ## Bindings (wrangler.jsonc)
 
-- **`cf-blog-watcher`** (KV) — Stores `{ seen: [] }` under key `"seen"`
+- **`cf-blog-watcher`** (KV) — Stores `{ seen: [] }` under key `"seen"`. Also stores live config overrides under keys `feed_url`, `ai_model`, `system_prompt` (see Runtime Config).
 - **`EMAIL`** (Send Email) — Platform email
 - **`AI`** (Workers AI) — LLM article analysis
-- **`FROM_EMAIL`** (var) — Sender address (must own domain, Email Routing enabled)
+- **`RECIPIENT`** (secret) — Recipient address
+- **`FROM_EMAIL`** (secret) — Sender address (must own domain, Email Routing enabled)
 - **`TRIGGER_TOKEN`** (secret) — High-entropy HTTP trigger token
 - **`ENABLE_DEBUG`** (var) — `"true"` enables `/trigger` endpoint
 
@@ -80,6 +83,29 @@ npx wrangler kv key delete seen --binding "cf-blog-watcher" --preview false --re
 
 Bounded to 200 items: `state.seen = [...new Set([...newItems, ...state.seen])].slice(0, 200)`
 
+## Runtime Config (KV)
+
+`loadConfig()` reads overrides from KV each run, falling back to built-in defaults in `src/config.js`. No redeploy needed. KV read failure or whitespace-only value → default.
+
+| KV key | Overrides | Default in `src/config.js` |
+|--------|-----------|---------------------------|
+| `feed_url` | RSS feed URL | `DEFAULT_FEED_URL` |
+| `ai_model` | Workers AI model | `DEFAULT_AI_MODEL` |
+| `system_prompt` | System prompt sent to model | `DEFAULT_SYSTEM_PROMPT` |
+
+```bash
+# Override (value inline)
+npx wrangler kv key put ai_model '@cf/meta/llama-4-scout' --binding "cf-blog-watcher" --remote
+
+# Override (prompt from file)
+npx wrangler kv key put system_prompt --path ./prompt.txt --binding "cf-blog-watcher" --remote
+
+# Restore default
+npx wrangler kv key delete system_prompt --binding "cf-blog-watcher" --remote
+```
+
+Note: keys `seen`, `feed_url`, `ai_model`, `system_prompt` share one namespace. Clearing state (`delete seen`) does not affect config overrides.
+
 ## Article Extraction
 
 `extractArticleText(html)` extracts readable text from blog HTML:
@@ -93,7 +119,7 @@ Truncated to ~7000 chars before LLM.
 
 ## AI Analysis Prompt
 
-System prompt instructs model to act as skeptical technical analyst for solutions engineers. Structure:
+Built-in system prompt lives in `src/config.js` as `DEFAULT_SYSTEM_PROMPT`; override live via KV key `system_prompt` (see Runtime Config). Instructs model to act as skeptical technical analyst for solutions engineers. Structure:
 1. **WHAT IT IS** — precise technical description, no buzzwords
 2. **WHY CUSTOMER CARES** — concrete pain points, weak value called out
 3. **MARKET POSITIONING** — comparison to AWS, Vercel, Fastly, Akamai, etc. Wins and losses
@@ -105,11 +131,12 @@ Rules: no filler, no marketing spin, no corporate enthusiasm. Opinionated. If in
 
 | Change | Where |
 |--------|-------|
-| Feed URL | `FEED_URL` in `src/worker.js` |
-| Recipient | `RECIPIENT` in `src/worker.js` |
-| AI model | `AI_MODEL` in `src/worker.js` |
+| Feed URL | KV `feed_url` (live) or `DEFAULT_FEED_URL` in `src/config.js` |
+| Recipient | `RECIPIENT` secret (`npx wrangler secret put RECIPIENT`) or `.dev.vars` |
+| AI model | KV `ai_model` (live) or `DEFAULT_AI_MODEL` in `src/config.js` |
+| System prompt | KV `system_prompt` (live) or `DEFAULT_SYSTEM_PROMPT` in `src/config.js` |
 | Cron schedule | `triggers.crons` in `wrangler.jsonc` |
-| Sender domain | `vars.FROM_EMAIL` in `wrangler.jsonc` |
+| Sender domain | `FROM_EMAIL` secret (`npx wrangler secret put FROM_EMAIL`) or `.dev.vars` |
 | State limit | `.slice(0, 200)` in `src/worker.js` |
 | Add RSS fields | `parseFeed()` regex in `src/worker.js` |
 
@@ -126,6 +153,7 @@ Rules: no filler, no marketing spin, no corporate enthusiasm. Opinionated. If in
 ## Important Notes
 
 - **Email domain ownership required**: `FROM_EMAIL` domain must be active in Cloudflare account with Email Routing configured. Sending from unowned domains fails.
+- **Email addresses never committed**: `RECIPIENT` and `FROM_EMAIL` are secrets. Local dev config lives in `.dev.vars` (gitignored; copy from `.dev.vars.example`). Production: `npx wrangler secret put`.
 - **Account ID**: Set in `wrangler.jsonc` for multiple accounts. Wrangler needs this for KV/secret ops in non-interactive mode.
 - **KV preview ID**: Replace `<ID_OF_PREVIEW_KV_NAMESPACE_FOR_LOCAL_DEVELOPMENT>` for local dev.
 - **Email Routing**: Must be enabled on sender domain. Catch-all or specific routing rule recommended.

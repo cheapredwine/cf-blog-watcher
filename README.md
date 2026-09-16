@@ -22,14 +22,14 @@ flowchart TB
 
         subgraph Bindings["Platform Bindings"]
             KV[("Workers KV\nSeen Articles")]
-            Email{{"Send Email\nno-reply@example.com"}}
+            Email{{"Send Email\nFROM_EMAIL (secret)"}}
             WAI{{"Workers AI\nLLM Summarizer"}}
         end
     end
 
     Feed[("Cloudflare Blog\nRSS Feed")]
     Articles[("Article HTML\nFull Content")]
-    Inbox["you@example.com\nInbox"]
+    Inbox["RECIPIENT (secret)\nInbox"]
 
     Cron --> Core
     Core --> Parser
@@ -49,20 +49,44 @@ flowchart TB
 ## How It Works
 
 1. **Scheduled Trigger** — Runs daily at 15:00 UTC via Cloudflare Cron Triggers
-2. **Feed Fetch** — Pulls the latest articles from `https://blog.cloudflare.com/rss/`
-3. **Deduplication** — Compares against previously seen articles stored in Workers KV
-4. **Article Fetch** — Downloads the full HTML of each new article
-5. **Content Extraction** — Strips navigation, tags, scripts, and extracts readable article text
-6. **AI Summarization** — Sends the article text to Workers AI (`@cf/meta/llama-3.1-8b-instruct-fast`) for a 2-3 sentence summary
-7. **Digest Generation** — Builds a formatted email with article title, date, link, AI summary, and RSS teaser
-8. **Email Delivery** — Sends the digest via Cloudflare's `send_email` binding
-9. **State Update** — Persists the latest article list back to KV (keeps last 200)
+2. **Config Load** — Reads live overrides from KV (`feed_url`, `ai_model`, `system_prompt`), falling back to defaults in `src/config.js`
+3. **Feed Fetch** — Pulls the latest articles from the configured RSS feed
+4. **Deduplication** — Compares against previously seen articles stored in Workers KV
+5. **Article Fetch** — Downloads the full HTML of each new article
+6. **Content Extraction** — Strips navigation, tags, scripts, and extracts readable article text
+7. **AI Summarization** — Sends the article text to Workers AI for a skeptical 3-5 sentence technical analysis
+8. **Digest Generation** — Builds a formatted email with article title, date, link, AI summary, and RSS teaser
+9. **Email Delivery** — Sends the digest via Cloudflare's `send_email` binding
+10. **State Update** — Persists the latest article list back to KV (keeps last 200)
 
 ## Security Model
 
 - **`workers_dev: false`** — No public `.workers.dev` URL. The Worker is only accessible via Cron Triggers.
 - **Debug trigger disabled by default** — The `/trigger` HTTP endpoint is only active when `ENABLE_DEBUG=true` is set.
 - **Token authentication** — When debug mode is enabled, the trigger requires a secret `TRIGGER_TOKEN` header with a high-entropy value.
+
+## Configuration
+
+Defaults live in `src/config.js`. Override any of them at runtime via KV — no redeploy required:
+
+| KV key | Overrides | Default |
+|--------|-----------|---------|
+| `feed_url` | RSS feed URL | `https://blog.cloudflare.com/rss/` |
+| `ai_model` | Workers AI model | `@cf/meta/llama-3.1-8b-instruct-fast` |
+| `system_prompt` | System prompt sent to the model | Built-in analyst prompt (`DEFAULT_SYSTEM_PROMPT`) |
+
+```bash
+# Override (inline value)
+npx wrangler kv key put ai_model '@cf/meta/llama-4-scout' --binding "cf-blog-watcher" --remote
+
+# Override (prompt from file)
+npx wrangler kv key put system_prompt --path ./prompt.txt --binding "cf-blog-watcher" --remote
+
+# Restore default
+npx wrangler kv key delete system_prompt --binding "cf-blog-watcher" --remote
+```
+
+Missing, whitespace-only, or unreadable KV values fall back to the defaults. Email addresses (`RECIPIENT`, `FROM_EMAIL`) are secrets, not KV config — see Setup below.
 
 ## Debug Mode (Manual Trigger)
 
@@ -151,13 +175,15 @@ npm run test:watch  # watch mode for development
 ```
 cf-blog-watcher/
 ├── src/
-│   └── worker.js          # Main Worker script
+│   ├── worker.js          # Main Worker script
+│   └── config.js          # Built-in defaults (feed URL, AI model, system prompt)
 ├── test/
 │   └── worker.test.js     # Unit + integration tests
 ├── vitest.config.js       # Vitest configuration
 ├── wrangler.jsonc         # Worker configuration, bindings, triggers
+├── .dev.vars.example      # Template for local secrets (copy to .dev.vars)
 ├── package.json           # Dependencies and scripts
-├── .gitignore             # Excludes node_modules, .wrangler
+├── .gitignore             # Excludes node_modules, .wrangler, .dev.vars
 ├── README.md              # This file
 └── AGENTS.md              # Development guide for AI agents
 ```
@@ -182,10 +208,16 @@ cf-blog-watcher/
 3. Configure `wrangler.jsonc`:
    - Update `account_id` to your Cloudflare account
    - Replace KV namespace IDs with your own
-   - Set `FROM_EMAIL` to an address on a domain you own with Email Routing enabled
    - Replace the preview KV ID for local development
    - Set `workers_dev: false` (recommended for production; set to `true` for testing)
-4. Set secrets:
+4. Configure email addresses (never committed to git):
+   - **Local dev**: copy `.dev.vars.example` to `.dev.vars` and fill in `RECIPIENT` and `FROM_EMAIL`
+   - **Production**: set as secrets:
+     ```bash
+     npx wrangler secret put RECIPIENT
+     npx wrangler secret put FROM_EMAIL
+     ```
+5. Set secrets:
    ```bash
    npx wrangler secret put TRIGGER_TOKEN
    ```
@@ -210,7 +242,8 @@ npx wrangler tail
 
 ## Key Features
 
-- **AI-Generated Summaries** — Fetches full article HTML and uses Workers AI to generate unique summaries (not just RSS descriptions)
+- **AI-Generated Summaries** — Fetches full article HTML and uses Workers AI to generate unique analyses (not just RSS descriptions)
+- **Live-Configurable** — Feed URL, AI model, and system prompt overridable via KV without redeploying
 - **Smart Content Extraction** — Strips navigation, tag clouds, scripts, and extracts clean article text from `<article>` elements
 - **Zero Infrastructure** — No servers, no databases, no cron runners
 - **Zero Public Surface** — No public URL by default; only Cron Triggers can invoke
