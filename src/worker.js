@@ -1,6 +1,5 @@
-const FEED_URL = 'https://blog.cloudflare.com/rss/';
-const RECIPIENT = 'you@example.com';
-const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
+import { DEFAULT_FEED_URL, DEFAULT_AI_MODEL, DEFAULT_SYSTEM_PROMPT } from './config.js';
+
 const MAX_SUMMARY_LENGTH = 2500;
 
 export default {
@@ -33,7 +32,13 @@ export default {
 export async function runDigest(env) {
   console.log('=== Starting blog digest ===');
 
-  const xml = await fetch(FEED_URL).then(r => {
+  if (!env.RECIPIENT || !env.FROM_EMAIL) {
+    throw new Error('Missing RECIPIENT or FROM_EMAIL — set via `wrangler secret put` or .dev.vars');
+  }
+
+  const config = await loadConfig(env);
+
+  const xml = await fetch(config.feedUrl).then(r => {
     if (!r.ok) throw new Error(`Feed fetch failed: ${r.status}`);
     return r.text();
   });
@@ -62,7 +67,7 @@ export async function runDigest(env) {
   console.log('Analyzing articles...');
   for (const item of newItems) {
     try {
-      item.summary = await summarizeArticle(env, item.link, item.description);
+      item.summary = await summarizeArticle(env, item.link, item.description, config.aiModel, config.systemPrompt);
       console.log(`Analyzed: ${item.title}`);
     } catch (err) {
       console.error(`Analysis failed for ${item.link}:`, err.message);
@@ -72,7 +77,7 @@ export async function runDigest(env) {
 
   const { text: bodyText, html: bodyHtml } = renderDigest(newItems);
   await env.EMAIL.send({
-    to: RECIPIENT,
+    to: env.RECIPIENT,
     from: env.FROM_EMAIL,
     subject: `${newItems.length} new Cloudflare blog article${newItems.length !== 1 ? 's' : ''} — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
     text: bodyText,
@@ -95,7 +100,27 @@ export function parseFeed(xml) {
   }));
 }
 
-export async function summarizeArticle(env, url, rssDescription) {
+async function getConfig(env, key, fallback) {
+  try {
+    const value = await env['cf-blog-watcher'].get(key);
+    if (value && value.trim()) return value.trim();
+  } catch (err) {
+    console.error(`Config read failed for ${key}:`, err.message);
+  }
+  return fallback;
+}
+
+export async function loadConfig(env) {
+  const [feedUrl, aiModel, systemPrompt] = await Promise.all([
+    getConfig(env, 'feed_url', DEFAULT_FEED_URL),
+    getConfig(env, 'ai_model', DEFAULT_AI_MODEL),
+    getConfig(env, 'system_prompt', DEFAULT_SYSTEM_PROMPT),
+  ]);
+  console.log(`Config: feed=${feedUrl} model=${aiModel} prompt=${systemPrompt === DEFAULT_SYSTEM_PROMPT ? 'default' : 'custom'}`);
+  return { feedUrl, aiModel, systemPrompt };
+}
+
+export async function summarizeArticle(env, url, rssDescription, aiModel = DEFAULT_AI_MODEL, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
   const html = await fetch(url).then(r => {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.text();
@@ -107,31 +132,12 @@ export async function summarizeArticle(env, url, rssDescription) {
   // Truncate to ~7000 chars to give the model more context
   const truncated = content.slice(0, 7000);
 
-  const response = await env.AI.run(AI_MODEL, {
+  const response = await env.AI.run(aiModel, {
     max_tokens: 1024,
     messages: [
       {
         role: 'system',
-        content: `You are a skeptical technical analyst writing for a senior solutions engineer who needs to position Cloudflare products to enterprise customers. Your job is to cut through marketing and evaluate the actual technical substance of each blog post.
-
-For every article, produce a tight 3-5 sentence analysis in this exact structure. Separate each section with a blank line:
-
-1. WHAT IT IS — A precise, technical description of the product/feature/announcement. No buzzwords. If the post is vague, say so.
-
-2. WHY A CUSTOMER CARES — Concrete customer pain points this solves. Be specific about who benefits and how. If the value proposition is weak, say it's weak.
-
-3. MARKET POSITIONING — How this compares to competitors (AWS, Vercel, Fastly, Akamai, Datadog, etc.). Where does it win? Where does it lose? If there's no real differentiation, call that out.
-
-4. CUSTOMER CONVERSATION — One sentence on how to position this with a customer. Be direct.
-
-Rules:
-- No filler. No "This matters because," "In today's landscape," "As organizations increasingly..."
-- No marketing spin. If the feature is incremental, say it's incremental. If the post is fluff, say it's fluff.
-- Be opinionated. Take a stance.
-- Use technical precision over vague optimism.
-- If the article is a rehash of an existing capability with new branding, call that out immediately.
-- Never say "Cloudflare is excited to announce" or quote corporate enthusiasm.
-- Output only the analysis — no preamble, no framing, no section headers.`
+        content: systemPrompt
       },
       {
         role: 'user',
@@ -212,18 +218,21 @@ export function formatSummary(summary, isHtml) {
     'MARKET POSITIONING —',
     'CUSTOMER CONVERSATION —',
   ];
-  for (let i = 0; i < sections.length; i++) {
-    const section = sections[i];
-    const idx = formatted.indexOf(section);
-    if (idx !== -1) {
-      const before = formatted.slice(0, idx).trimEnd();
-      const after = formatted.slice(idx + section.length);
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const section of sections) {
+    // Section labels may arrive numbered ("2. WHY A CUSTOMER CARES —");
+    // include the number in the break+strong so it doesn't dangle at the
+    // end of the previous paragraph.
+    const re = new RegExp(`(?:\\d+\\.\\s*)?${esc(section)}`);
+    const m = formatted.match(re);
+    if (m) {
+      const before = formatted.slice(0, m.index).trimEnd();
+      const after = formatted.slice(m.index + m[0].length);
+      const spacer = before ? (isHtml ? '<br><br>' : '\n\n') : '';
       if (isHtml) {
-        const spacer = i > 0 ? '<br><br>' : '';
-        formatted = before + spacer + '<strong>' + section + '</strong>' + after;
+        formatted = before + spacer + '<strong>' + m[0] + '</strong>' + after;
       } else {
-        const spacer = i > 0 ? '\n\n' : '';
-        formatted = before + spacer + section + after;
+        formatted = before + spacer + m[0] + after;
       }
     }
   }
@@ -234,12 +243,13 @@ export function renderDigest(items) {
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
   // Truncate summaries that exceed the hard cap (rare, but protects email size)
+  // and substitute a fallback for missing/empty summaries
   const safeSummaries = items.map(item => {
     const summary = item.summary || 'Not available.';
     if (summary.length > MAX_SUMMARY_LENGTH) {
       return { ...item, summary: truncateAtSentence(summary, MAX_SUMMARY_LENGTH) };
     }
-    return item;
+    return { ...item, summary };
   });
 
   // Plain-text fallback

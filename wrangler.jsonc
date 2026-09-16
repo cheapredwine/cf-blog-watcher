@@ -7,9 +7,6 @@
   "triggers": {
     "crons": ["0 15 * * *"]
   },
-  "vars": {
-    "FROM_EMAIL": "no-reply@example.com"
-  },
   "kv_namespaces": [
     {
       "binding": "cf-blog-watcher",

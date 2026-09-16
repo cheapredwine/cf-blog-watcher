@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import worker, { parseFeed, clean, renderDigest, loadState, saveState, runDigest } from '../src/worker.js';
+import worker, { parseFeed, clean, renderDigest, loadState, saveState, runDigest, formatSummary, summarizeArticle, loadConfig } from '../src/worker.js';
+import { DEFAULT_FEED_URL, DEFAULT_AI_MODEL, DEFAULT_SYSTEM_PROMPT } from '../src/config.js';
 
 describe('parseFeed', () => {
   it('extracts title, link, pubDate, and description from RSS items', () => {
@@ -85,6 +86,51 @@ describe('clean', () => {
 
   it('returns empty string for empty input', () => {
     expect(clean('')).toBe('');
+  });
+});
+
+describe('formatSummary', () => {
+  const numbered = 'Fits the platform story. 1. WHAT IT IS — An edge-native queue. 2. WHY A CUSTOMER CARES — Lost work. 3. MARKET POSITIONING — Beats SQS on latency. 4. CUSTOMER CONVERSATION — Lead with durability.';
+
+  it('keeps section numbers attached to their labels in HTML', () => {
+    const html = formatSummary(numbered, true);
+    expect(html).toContain('<strong>1. WHAT IT IS —</strong>');
+    expect(html).toContain('<strong>2. WHY A CUSTOMER CARES —</strong>');
+    expect(html).toContain('<strong>3. MARKET POSITIONING —</strong>');
+    expect(html).toContain('<strong>4. CUSTOMER CONVERSATION —</strong>');
+  });
+
+  it('never leaves a dangling number at the end of the previous paragraph', () => {
+    const html = formatSummary(numbered, true);
+    expect(html).not.toMatch(/\d\.\s*<br><br><strong>/);
+  });
+
+  it('breaks paragraphs before each numbered section in HTML', () => {
+    const html = formatSummary(numbered, true);
+    expect(html).toContain('Fits the platform story.<br><br><strong>1. WHAT IT IS —</strong>');
+    expect(html).toContain('queue.<br><br><strong>2. WHY A CUSTOMER CARES —</strong>');
+    expect(html).toContain('work.<br><br><strong>3. MARKET POSITIONING —</strong>');
+  });
+
+  it('breaks paragraphs before each numbered section in text', () => {
+    const text = formatSummary(numbered, false);
+    expect(text).toContain('Fits the platform story.\n\n1. WHAT IT IS —');
+    expect(text).toContain('queue.\n\n2. WHY A CUSTOMER CARES —');
+    expect(text).not.toMatch(/\d\.\n\n/);
+  });
+
+  it('handles summaries without leading numbers', () => {
+    const plain = 'Intro line. WHAT IT IS — A queue. WHY A CUSTOMER CARES — Durability.';
+    const html = formatSummary(plain, true);
+    expect(html).toContain('<strong>WHAT IT IS —</strong>');
+    expect(html).toContain('<strong>WHY A CUSTOMER CARES —</strong>');
+    expect(html).toContain('Intro line.<br><br><strong>WHAT IT IS —</strong>');
+  });
+
+  it('leaves summaries without section labels untouched', () => {
+    const plain = 'Just a plain summary sentence.';
+    expect(formatSummary(plain, true)).toBe('Just a plain summary sentence.');
+    expect(formatSummary(plain, false)).toBe('Just a plain summary sentence.');
   });
 });
 
@@ -175,6 +221,143 @@ describe('saveState', () => {
   });
 });
 
+describe('loadConfig', () => {
+  const consoleSpySetup = () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    return { log, err };
+  };
+
+  it('returns defaults when KV is empty', async () => {
+    const env = {
+      'cf-blog-watcher': { get: vi.fn().mockResolvedValue(null) },
+    };
+    const spy = consoleSpySetup();
+    const config = await loadConfig(env);
+    expect(config).toEqual({
+      feedUrl: DEFAULT_FEED_URL,
+      aiModel: DEFAULT_AI_MODEL,
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    });
+    expect(env['cf-blog-watcher'].get).toHaveBeenCalledWith('feed_url');
+    expect(env['cf-blog-watcher'].get).toHaveBeenCalledWith('ai_model');
+    expect(env['cf-blog-watcher'].get).toHaveBeenCalledWith('system_prompt');
+    spy.log.mockRestore();
+    spy.err.mockRestore();
+  });
+
+  it('returns KV overrides for all three keys', async () => {
+    const kvGet = vi.fn(key => {
+      if (key === 'feed_url') return Promise.resolve('https://example.com/feed.xml');
+      if (key === 'ai_model') return Promise.resolve('@cf/meta/llama-4-scout');
+      if (key === 'system_prompt') return Promise.resolve('Custom prompt rules.');
+      return Promise.resolve(null);
+    });
+    const env = { 'cf-blog-watcher': { get: kvGet } };
+    const spy = consoleSpySetup();
+    const config = await loadConfig(env);
+    expect(config).toEqual({
+      feedUrl: 'https://example.com/feed.xml',
+      aiModel: '@cf/meta/llama-4-scout',
+      systemPrompt: 'Custom prompt rules.',
+    });
+    spy.log.mockRestore();
+    spy.err.mockRestore();
+  });
+
+  it('falls back to defaults for whitespace-only overrides', async () => {
+    const kvGet = vi.fn(key => {
+      if (key === 'feed_url') return Promise.resolve('   ');
+      if (key === 'ai_model') return Promise.resolve('\n\t');
+      if (key === 'system_prompt') return Promise.resolve('  ');
+      return Promise.resolve(null);
+    });
+    const env = { 'cf-blog-watcher': { get: kvGet } };
+    const spy = consoleSpySetup();
+    const config = await loadConfig(env);
+    expect(config).toEqual({
+      feedUrl: DEFAULT_FEED_URL,
+      aiModel: DEFAULT_AI_MODEL,
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    });
+    spy.log.mockRestore();
+    spy.err.mockRestore();
+  });
+
+  it('falls back to defaults when KV reads throw', async () => {
+    const env = {
+      'cf-blog-watcher': { get: vi.fn().mockRejectedValue(new Error('KV down')) },
+    };
+    const spy = consoleSpySetup();
+    const config = await loadConfig(env);
+    expect(config).toEqual({
+      feedUrl: DEFAULT_FEED_URL,
+      aiModel: DEFAULT_AI_MODEL,
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    });
+    spy.log.mockRestore();
+    spy.err.mockRestore();
+  });
+
+  it('trims whitespace around KV values', async () => {
+    const env = {
+      'cf-blog-watcher': { get: vi.fn().mockResolvedValue('  @cf/meta/llama-4-scout  ') },
+    };
+    const spy = consoleSpySetup();
+    const config = await loadConfig(env);
+    expect(config.aiModel).toBe('@cf/meta/llama-4-scout');
+    spy.log.mockRestore();
+    spy.err.mockRestore();
+  });
+});
+
+describe('summarizeArticle', () => {
+  it('uses the provided model and system prompt', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('<html><body><article><p>Content</p></article></body></html>'),
+    });
+    const aiRun = vi.fn().mockResolvedValue({ response: '  Analysis.  ' });
+    const env = { AI: { run: aiRun } };
+
+    const summary = await summarizeArticle(env, 'https://blog.cloudflare.com/x/', 'Teaser', '@cf/custom-model', 'Custom system prompt.');
+
+    expect(aiRun).toHaveBeenCalledWith('@cf/custom-model', expect.objectContaining({
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: 'Custom system prompt.' },
+        { role: 'user', content: expect.stringContaining('Teaser') },
+      ],
+    }));
+    expect(summary).toBe('Analysis.');
+  });
+
+  it('defaults to built-in model and system prompt', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('<html><body><article><p>Content</p></article></body></html>'),
+    });
+    const aiRun = vi.fn().mockResolvedValue({ response: 'Analysis.' });
+    const env = { AI: { run: aiRun } };
+
+    await summarizeArticle(env, 'https://blog.cloudflare.com/x/', 'Teaser');
+
+    const [model, opts] = aiRun.mock.calls[0];
+    expect(model).toBe(DEFAULT_AI_MODEL);
+    expect(opts.messages[0].content).toBe(DEFAULT_SYSTEM_PROMPT);
+  });
+
+  it('throws when article content cannot be extracted', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('<html><body><script>var x=1;</script></body></html>'),
+    });
+    const env = { AI: { run: vi.fn() } };
+
+    await expect(summarizeArticle(env, 'https://blog.cloudflare.com/x/', 'Teaser')).rejects.toThrow('No article content extracted');
+  });
+});
+
 describe('fetch handler', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -253,6 +436,7 @@ describe('runDigest integration', () => {
       'cf-blog-watcher': { get: kvGet, put: kvPut },
       EMAIL: { send: emailSend },
       AI: { run: aiRun },
+      RECIPIENT: 'you@example.com',
       FROM_EMAIL: 'no-reply@example.com',
     };
 
@@ -295,6 +479,7 @@ describe('runDigest integration', () => {
       'cf-blog-watcher': { get: kvGet, put: kvPut },
       EMAIL: { send: emailSend },
       FROM_EMAIL: 'no-reply@example.com',
+      RECIPIENT: 'you@example.com',
     };
 
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -317,9 +502,93 @@ describe('runDigest integration', () => {
       'cf-blog-watcher': { get: vi.fn(), put: vi.fn() },
       EMAIL: { send: vi.fn() },
       FROM_EMAIL: 'no-reply@example.com',
+      RECIPIENT: 'you@example.com',
     };
 
     await expect(runDigest(env)).rejects.toThrow('Feed fetch failed: 503');
+  });
+
+  it('throws before fetching when RECIPIENT is missing', async () => {
+    global.fetch = vi.fn();
+
+    const env = {
+      'cf-blog-watcher': { get: vi.fn(), put: vi.fn() },
+      EMAIL: { send: vi.fn() },
+      FROM_EMAIL: 'no-reply@example.com',
+    };
+
+    await expect(runDigest(env)).rejects.toThrow(/RECIPIENT or FROM_EMAIL/);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(env.EMAIL.send).not.toHaveBeenCalled();
+  });
+
+  it('throws before fetching when FROM_EMAIL is missing', async () => {
+    global.fetch = vi.fn();
+
+    const env = {
+      'cf-blog-watcher': { get: vi.fn(), put: vi.fn() },
+      EMAIL: { send: vi.fn() },
+      RECIPIENT: 'you@example.com',
+    };
+
+    await expect(runDigest(env)).rejects.toThrow(/RECIPIENT or FROM_EMAIL/);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(env.EMAIL.send).not.toHaveBeenCalled();
+  });
+
+  it('throws before fetching when both email vars are empty strings', async () => {
+    global.fetch = vi.fn();
+
+    const env = {
+      'cf-blog-watcher': { get: vi.fn(), put: vi.fn() },
+      EMAIL: { send: vi.fn() },
+      RECIPIENT: '',
+      FROM_EMAIL: '',
+    };
+
+    await expect(runDigest(env)).rejects.toThrow(/RECIPIENT or FROM_EMAIL/);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(env.EMAIL.send).not.toHaveBeenCalled();
+  });
+
+  it('sends email addresses exactly as configured in env', async () => {
+    const mockXml = `
+      <rss>
+        <item>
+          <title>Post</title>
+          <link>https://blog.cloudflare.com/post/</link>
+          <description>Desc</description>
+        </item>
+      </rss>
+    `;
+    const mockHtml = '<html><body><article><p>Body</p></article></body></html>';
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(mockXml) })
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(mockHtml) });
+
+    const emailSend = vi.fn().mockResolvedValue(undefined);
+    const aiRun = vi.fn().mockResolvedValue({ response: 'Analysis.' });
+
+    const env = {
+      'cf-blog-watcher': { get: vi.fn().mockResolvedValue(null), put: vi.fn() },
+      EMAIL: { send: emailSend },
+      AI: { run: aiRun },
+      RECIPIENT: 'custom-recipient@team.example.org',
+      FROM_EMAIL: 'watcher@sender.example.org',
+    };
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const consoleErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await runDigest(env);
+
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'custom-recipient@team.example.org',
+      from: 'watcher@sender.example.org',
+    }));
+
+    consoleSpy.mockRestore();
+    consoleErrSpy.mockRestore();
   });
 
   it('bounds state to 200 items', async () => {
@@ -349,6 +618,7 @@ describe('runDigest integration', () => {
       EMAIL: { send: vi.fn().mockResolvedValue(undefined) },
       AI: { run: aiRun },
       FROM_EMAIL: 'no-reply@example.com',
+      RECIPIENT: 'you@example.com',
     };
 
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
