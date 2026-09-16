@@ -92,12 +92,14 @@ describe('clean', () => {
 describe('formatSummary', () => {
   const numbered = 'Fits the platform story. 1. WHAT IT IS — An edge-native queue. 2. WHY A CUSTOMER CARES — Lost work. 3. MARKET POSITIONING — Beats SQS on latency. 4. CUSTOMER CONVERSATION — Lead with durability.';
 
-  it('keeps section numbers attached to their labels in HTML', () => {
+  it('strips section numbers, keeps labels in HTML', () => {
     const html = formatSummary(numbered, true);
-    expect(html).toContain('<strong>1. WHAT IT IS —</strong>');
-    expect(html).toContain('<strong>2. WHY A CUSTOMER CARES —</strong>');
-    expect(html).toContain('<strong>3. MARKET POSITIONING —</strong>');
-    expect(html).toContain('<strong>4. CUSTOMER CONVERSATION —</strong>');
+    expect(html).toContain('<strong>WHAT IT IS —</strong>');
+    expect(html).toContain('<strong>WHY A CUSTOMER CARES —</strong>');
+    expect(html).toContain('<strong>MARKET POSITIONING —</strong>');
+    expect(html).toContain('<strong>CUSTOMER CONVERSATION —</strong>');
+    expect(html).not.toMatch(/\d+\.\s*<strong>/);
+    expect(html).not.toContain('1. WHAT IT IS');
   });
 
   it('never leaves a dangling number at the end of the previous paragraph', () => {
@@ -105,18 +107,17 @@ describe('formatSummary', () => {
     expect(html).not.toMatch(/\d\.\s*<br><br><strong>/);
   });
 
-  it('breaks paragraphs before each numbered section in HTML', () => {
+  it('breaks paragraphs before each section in HTML', () => {
     const html = formatSummary(numbered, true);
-    expect(html).toContain('Fits the platform story.<br><br><strong>1. WHAT IT IS —</strong>');
-    expect(html).toContain('queue.<br><br><strong>2. WHY A CUSTOMER CARES —</strong>');
-    expect(html).toContain('work.<br><br><strong>3. MARKET POSITIONING —</strong>');
+    expect(html).toContain('Fits the platform story.<br><br><strong>WHAT IT IS —</strong>');
+    expect(html).toContain('queue.<br><br><strong>WHY A CUSTOMER CARES —</strong>');
+    expect(html).toContain('work.<br><br><strong>MARKET POSITIONING —</strong>');
   });
 
-  it('breaks paragraphs before each numbered section in text', () => {
+  it('breaks paragraphs before each section in text', () => {
     const text = formatSummary(numbered, false);
-    expect(text).toContain('Fits the platform story.\n\n1. WHAT IT IS —');
-    expect(text).toContain('queue.\n\n2. WHY A CUSTOMER CARES —');
-    expect(text).not.toMatch(/\d\.\n\n/);
+    expect(text).toContain('Fits the platform story.\n\nWHAT IT IS —');
+    expect(text).toContain('queue.\n\nWHY A CUSTOMER CARES —');
   });
 
   it('handles summaries without leading numbers', () => {

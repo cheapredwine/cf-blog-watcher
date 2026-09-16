@@ -220,9 +220,9 @@ export function formatSummary(summary, isHtml) {
   ];
   const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const section of sections) {
-    // Section labels may arrive numbered ("2. WHY A CUSTOMER CARES —");
-    // include the number in the break+strong so it doesn't dangle at the
-    // end of the previous paragraph.
+    // Model emits numbered section labels ("2. WHY A CUSTOMER CARES —");
+    // strip the number (posts are numbered, sections are not) and move the
+    // label to its own paragraph so text doesn't run together.
     const re = new RegExp(`(?:\\d+\\.\\s*)?${esc(section)}`);
     const m = formatted.match(re);
     if (m) {
@@ -230,9 +230,9 @@ export function formatSummary(summary, isHtml) {
       const after = formatted.slice(m.index + m[0].length);
       const spacer = before ? (isHtml ? '<br><br>' : '\n\n') : '';
       if (isHtml) {
-        formatted = before + spacer + '<strong>' + m[0] + '</strong>' + after;
+        formatted = before + spacer + '<strong>' + section + '</strong>' + after;
       } else {
-        formatted = before + spacer + m[0] + after;
+        formatted = before + spacer + section + after;
       }
     }
   }
