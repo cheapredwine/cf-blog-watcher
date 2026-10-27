@@ -1,5 +1,10 @@
 # Cloudflare Blog Watcher
 
+> ⚠️ **NOT OFFICIAL CLOUDFLARE.** Not affiliated with or endorsed by Cloudflare, Inc.
+> NO WARRANTIES, EXPRESS OR IMPLIED. Effectively untested demo code — read everything
+> and dry-run before you run. You assume all risk. See [DISCLAIMER.md](./DISCLAIMER.md).
+
+
 A Cloudflare Worker that monitors the Cloudflare blog RSS feed, fetches full article content, generates AI-powered summaries, and sends a daily email digest of new articles. Built entirely on Cloudflare's edge platform with zero external infrastructure.
 
 ## Architecture
